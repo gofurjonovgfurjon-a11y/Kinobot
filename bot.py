@@ -1,25 +1,71 @@
-import asyncio
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
+import json
+import os
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
 TOKEN = "8983129680:AAHOBTUA_wt4BJLckxqg-FR2hKcdv7iIX78"
 
-bot = Bot(token=TOKEN)
-dp = Dispatcher()
+def load_movies():
+    if os.path.exists("movies.json"):
+        with open("movies.json", "r") as f:
+            return json.load(f)
+    return {}
 
-@dp.message(Command("start"))
-async def start(message: types.Message):
-    await message.answer(
-        "🎬 KinoKashf ga xush kelibsiz!\n\n"
-        "Kino nomini yozing!"
-    )
+def save_movies(movies):
+    with open("movies.json", "w") as f:
+        json.dump(movies, f)
 
-@dp.message()
-async def handle(message: types.Message):
-    await message.answer(f"🔍 {message.text} — tez orada kinolar qo'shiladi!")
+movies = load_movies()
 
-async def main():
-    await dp.start_polling(bot)
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🎬 KinoKashf ga xush kelibsiz!\n\nKino raqamini yozing!")
 
-if __name__ == "__main__":
-    asyncio.run(main())
+async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    if text.startswith("/del "):
+        code = text[5:]
+        if code in movies:
+            del movies[code]
+            save_movies(movies)
+            await update.message.reply_text(f"✅ {code} raqamli kino o'chirildi!")
+        else:
+            await update.message.reply_text("❌ Bunday kino topilmadi!")
+        return
+    if text in movies:
+        movie = movies[text]
+        keyboard = []
+        if "360" in movie:
+            keyboard.append([InlineKeyboardButton("📱 360p", callback_data=f"{text}|360")])
+        if "720" in movie:
+            keyboard.append([InlineKeyboardButton("🎬 720p", callback_data=f"{text}|720")])
+        if "1080" in movie:
+            keyboard.append([InlineKeyboardButton("🔥 1080p", callback_data=f"{text}|1080")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(f"🎬 {movie['name']}\n📝 {movie['info']}", reply_markup=reply_markup)
+    else:
+        await update.message.reply_text("❌ Kino topilmadi!")
+
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    code, quality = query.data.split("|")
+    file_id = movies[code][quality]
+    await query.message.reply_video(file_id)
+
+async def save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.video and update.message.caption:
+        parts = update.message.caption.split("|")
+        if len(parts) == 4:
+            code, name, info, quality = parts
+            if code not in movies:
+                movies[code] = {"name": name, "info": info}
+            movies[code][quality] = update.message.video.file_id
+            save_movies(movies)
+            await update.message.reply_text(f"✅ {name} ({quality}) saqlandi!")
+
+app = ApplicationBuilder().token(TOKEN).build()
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CallbackQueryHandler(button))
+app.add_handler(MessageHandler(filters.VIDEO, save))
+app.add_handler(MessageHandler(filters.TEXT, handle))
+app.run_polling()
