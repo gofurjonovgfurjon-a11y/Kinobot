@@ -17,15 +17,32 @@ threading.Thread(target=lambda: HTTPServer(('0.0.0.0', 8080), Handler).serve_for
 
 TOKEN = "8983129680:AAHOBTUA_wt4BJLckxqg-FR2hKcdv7iIX78"
 MONGO_URI = "mongodb+srv://Kinobot:Agafurvv78@cluster0.dy9xrik.mongodb.net/?appName=Cluster0"
+CHANNEL_ID = -1003932032419
 
 client = MongoClient(MONGO_URI)
 db = client["kinobot"]
 col = db["movies"]
 
+async def check_sub(user_id, bot):
+    try:
+        member = await bot.get_chat_member(CHANNEL_ID, user_id)
+        return member.status in ["member", "administrator", "creator"]
+    except:
+        return False
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_sub(update.message.from_user.id, context.bot):
+        await update.message.reply_text(
+            "⚠️ Botdan foydalanish uchun kanalga obuna bo'ling!\n\n"
+            "Obuna bo'lgach /start bosing."
+        )
+        return
     await update.message.reply_text("🎬 KinoKashf ga xush kelibsiz!\n\nKino raqamini yozing!")
 
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_sub(update.message.from_user.id, context.bot):
+        await update.message.reply_text("⚠️ Avval kanalga obuna bo'ling, keyin /start bosing!")
+        return
     text = update.message.text.strip()
     if text.startswith("/del "):
         code = text[5:]
@@ -56,6 +73,9 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    if not await check_sub(query.from_user.id, context.bot):
+        await query.message.reply_text("⚠️ Avval kanalga obuna bo'ling!")
+        return
     code, quality = query.data.split("|")
     movie = col.find_one({"code": code})
     file_id = movie[f"q{quality}"]
@@ -66,19 +86,16 @@ async def save(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parts = update.message.caption.split("|")
         if len(parts) == 7:
             code, name, info, actors, imdb, budget, quality = parts
-            col.update_one(
-                {"code": code},
-                {"$set": {
+            if code not in [m["code"] for m in col.find()]:
+                col.insert_one({
                     "code": code,
                     "name": name,
                     "info": info,
                     "actors": actors,
                     "imdb": imdb,
-                    "budget": budget,
-                    f"q{quality}": update.message.video.file_id
-                }},
-                upsert=True
-            )
+                    "budget": budget
+                })
+            col.update_one({"code": code}, {"$set": {f"q{quality}": update.message.video.file_id}})
             await update.message.reply_text(f"✅ {name} ({quality}) saqlandi!")
 
 app = ApplicationBuilder().token(TOKEN).build()
