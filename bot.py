@@ -1,7 +1,7 @@
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import json
 import os
+from pymongo import MongoClient
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
@@ -16,18 +16,11 @@ class Handler(BaseHTTPRequestHandler):
 threading.Thread(target=lambda: HTTPServer(('0.0.0.0', 8080), Handler).serve_forever(), daemon=True).start()
 
 TOKEN = "8983129680:AAHOBTUA_wt4BJLckxqg-FR2hKcdv7iIX78"
+MONGO_URI = "mongodb+srv://Kinobot:Agafurvv78@cluster0.dy9xrik.mongodb.net/?appName=Cluster0"
 
-def load_movies():
-    if os.path.exists("movies.json"):
-        with open("movies.json", "r") as f:
-            return json.load(f)
-    return {}
-
-def save_movies(movies):
-    with open("movies.json", "w") as f:
-        json.dump(movies, f)
-
-movies = load_movies()
+client = MongoClient(MONGO_URI)
+db = client["kinobot"]
+col = db["movies"]
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🎬 KinoKashf ga xush kelibsiz!\n\nKino raqamini yozing!")
@@ -36,21 +29,17 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     if text.startswith("/del "):
         code = text[5:]
-        if code in movies:
-            del movies[code]
-            save_movies(movies)
-            await update.message.reply_text(f"✅ {code} raqamli kino o'chirildi!")
-        else:
-            await update.message.reply_text("❌ Bunday kino topilmadi!")
+        col.delete_one({"code": code})
+        await update.message.reply_text(f"✅ {code} raqamli kino o'chirildi!")
         return
-    if text in movies:
-        movie = movies[text]
+    movie = col.find_one({"code": text})
+    if movie:
         keyboard = []
-        if "360" in movie:
+        if "q360" in movie:
             keyboard.append([InlineKeyboardButton("📱 360p", callback_data=f"{text}|360")])
-        if "720" in movie:
+        if "q720" in movie:
             keyboard.append([InlineKeyboardButton("🎬 720p", callback_data=f"{text}|720")])
-        if "1080" in movie:
+        if "q1080" in movie:
             keyboard.append([InlineKeyboardButton("🔥 1080p", callback_data=f"{text}|1080")])
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(
@@ -68,7 +57,8 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     code, quality = query.data.split("|")
-    file_id = movies[code][quality]
+    movie = col.find_one({"code": code})
+    file_id = movie[f"q{quality}"]
     await query.message.reply_video(file_id)
 
 async def save(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -76,16 +66,19 @@ async def save(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parts = update.message.caption.split("|")
         if len(parts) == 7:
             code, name, info, actors, imdb, budget, quality = parts
-            if code not in movies:
-                movies[code] = {
+            col.update_one(
+                {"code": code},
+                {"$set": {
+                    "code": code,
                     "name": name,
                     "info": info,
                     "actors": actors,
                     "imdb": imdb,
-                    "budget": budget
-                }
-            movies[code][quality] = update.message.video.file_id
-            save_movies(movies)
+                    "budget": budget,
+                    f"q{quality}": update.message.video.file_id
+                }},
+                upsert=True
+            )
             await update.message.reply_text(f"✅ {name} ({quality}) saqlandi!")
 
 app = ApplicationBuilder().token(TOKEN).build()
