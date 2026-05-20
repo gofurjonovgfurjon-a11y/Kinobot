@@ -53,7 +53,14 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if "1080" in movie:
             keyboard.append([InlineKeyboardButton("🔥 1080p", callback_data=f"{text}|1080")])
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text(f"🎬 {movie['name']}\n📝 {movie['info']}", reply_markup=reply_markup)
+        await update.message.reply_text(
+            f"🎬 {movie['name']}\n"
+            f"📅 {movie['info']}\n"
+            f"👥 {movie['actors']}\n"
+            f"⭐ {movie['imdb']}\n"
+            f"💰 {movie['budget']}",
+            reply_markup=reply_markup
+        )
     else:
         await update.message.reply_text("❌ Kino topilmadi!")
 
@@ -67,10 +74,16 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.video and update.message.caption:
         parts = update.message.caption.split("|")
-        if len(parts) == 4:
-            code, name, info, quality = parts
+        if len(parts) == 7:
+            code, name, info, actors, imdb, budget, quality = parts
             if code not in movies:
-                movies[code] = {"name": name, "info": info}
+                movies[code] = {
+                    "name": name,
+                    "info": info,
+                    "actors": actors,
+                    "imdb": imdb,
+                    "budget": budget
+                }
             movies[code][quality] = update.message.video.file_id
             save_movies(movies)
             await update.message.reply_text(f"✅ {name} ({quality}) saqlandi!")
