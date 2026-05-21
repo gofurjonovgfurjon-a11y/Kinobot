@@ -26,7 +26,7 @@ col = db["movies"]
 async def check_sub(user_id, bot):
     try:
         member = await bot.get_chat_member(CHANNEL_ID, user_id)
-        return member.status in ["member", "administrator", "creator"]
+        return member.status != "kicked" and member.status != "left"
     except:
         return False
 
