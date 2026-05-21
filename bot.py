@@ -1,6 +1,5 @@
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import os
 from pymongo import MongoClient
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
@@ -33,10 +32,13 @@ async def check_sub(user_id, bot):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_sub(update.message.from_user.id, context.bot):
-        keyboard = [[InlineKeyboardButton("📢 Kanalga obuna bo'ling", url=CHANNEL_LINK)]]
+        keyboard = [
+            [InlineKeyboardButton("📢 Kanalga obuna bo'ling", url=CHANNEL_LINK)],
+            [InlineKeyboardButton("✅ Tasdiqlash", callback_data="check_sub")]
+        ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(
-            "⚠️ Botdan foydalanish uchun kanalga obuna bo'ling!\n\nObuna bo'lgach /start bosing.",
+            "⚠️ Botdan foydalanish uchun kanalga obuna bo'ling!\n\nObuna bo'lgach ✅ Tasdiqlash bosing.",
             reply_markup=reply_markup
         )
         return
@@ -44,7 +46,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_sub(update.message.from_user.id, context.bot):
-        keyboard = [[InlineKeyboardButton("📢 Kanalga obuna bo'ling", url=CHANNEL_LINK)]]
+        keyboard = [
+            [InlineKeyboardButton("📢 Kanalga obuna bo'ling", url=CHANNEL_LINK)],
+            [InlineKeyboardButton("✅ Tasdiqlash", callback_data="check_sub")]
+        ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(
             "⚠️ Avval kanalga obuna bo'ling!",
@@ -81,10 +86,11 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if not await check_sub(query.from_user.id, context.bot):
-        keyboard = [[InlineKeyboardButton("📢 Kanalga obuna bo'ling", url=CHANNEL_LINK)]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.message.reply_text("⚠️ Avval kanalga obuna bo'ling!", reply_markup=reply_markup)
+    if query.data == "check_sub":
+        if await check_sub(query.from_user.id, context.bot):
+            await query.message.edit_text("🎬 KinoKashf ga xush kelibsiz!\n\nKino raqamini yozing!")
+        else:
+            await query.answer("❌ Siz hali obuna bo'lmadingiz!", show_alert=True)
         return
     code, quality = query.data.split("|")
     movie = col.find_one({"code": code})
