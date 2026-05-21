@@ -1,8 +1,8 @@
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pymongo import MongoClient
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatJoinRequest
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ChatJoinRequestHandler, filters, ContextTypes
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -26,19 +26,26 @@ col = db["movies"]
 async def check_sub(user_id, bot):
     try:
         member = await bot.get_chat_member(CHANNEL_ID, user_id)
-        return member.status != "kicked" and member.status != "left"
+        return member.status in ["member", "administrator", "creator"]
     except:
         return False
+
+async def approve_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.chat_join_request.approve()
+    await context.bot.send_message(
+        update.chat_join_request.from_user.id,
+        "✅ Kanalga qo'shildingiz!\n\n🎬 KinoKashf ga xush kelibsiz!\n\nKino raqamini yozing!"
+    )
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_sub(update.message.from_user.id, context.bot):
         keyboard = [
-            [InlineKeyboardButton("📢 Kanalga obuna bo'ling", url=CHANNEL_LINK)],
+            [InlineKeyboardButton("📢 Kanalga qo'shilish so'rovi yuboring", url=CHANNEL_LINK)],
             [InlineKeyboardButton("✅ Tasdiqlash", callback_data="check_sub")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(
-            "⚠️ Botdan foydalanish uchun kanalga obuna bo'ling!\n\nObuna bo'lgach ✅ Tasdiqlash bosing.",
+            "⚠️ Botdan foydalanish uchun kanalga qo'shiling!\n\nKanalga so'rov yuboring, bot avtomatik qabul qiladi.\n\nQo'shilgach ✅ Tasdiqlash bosing.",
             reply_markup=reply_markup
         )
         return
@@ -47,12 +54,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_sub(update.message.from_user.id, context.bot):
         keyboard = [
-            [InlineKeyboardButton("📢 Kanalga obuna bo'ling", url=CHANNEL_LINK)],
+            [InlineKeyboardButton("📢 Kanalga qo'shilish so'rovi yuboring", url=CHANNEL_LINK)],
             [InlineKeyboardButton("✅ Tasdiqlash", callback_data="check_sub")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(
-            "⚠️ Avval kanalga obuna bo'ling!",
+            "⚠️ Avval kanalga qo'shiling!",
             reply_markup=reply_markup
         )
         return
@@ -90,7 +97,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if await check_sub(query.from_user.id, context.bot):
             await query.message.edit_text("🎬 KinoKashf ga xush kelibsiz!\n\nKino raqamini yozing!")
         else:
-            await query.answer("❌ Siz hali obuna bo'lmadingiz!", show_alert=True)
+            await query.answer("❌ Siz hali kanalga qo'shilmadingiz!", show_alert=True)
         return
     code, quality = query.data.split("|")
     movie = col.find_one({"code": code})
@@ -118,6 +125,7 @@ async def save(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"✅ {name} ({quality}) saqlandi!")
 
 app = ApplicationBuilder().token(TOKEN).build()
+app.add_handler(ChatJoinRequestHandler(approve_join))
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(button))
 app.add_handler(MessageHandler(filters.VIDEO, save))
