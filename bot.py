@@ -18,6 +18,7 @@ threading.Thread(target=lambda: HTTPServer(('0.0.0.0', 8080), Handler).serve_for
 TOKEN = "8983129680:AAHOBTUA_wt4BJLckxqg-FR2hKcdv7iIX78"
 MONGO_URI = "mongodb+srv://Kinobot:Agafurvv78@cluster0.dy9xrik.mongodb.net/?appName=Cluster0"
 CHANNEL_ID = -1003932032419
+CHANNEL_LINK = "https://t.me/+B6ntAmj86_AwOTUy"
 
 client = MongoClient(MONGO_URI)
 db = client["kinobot"]
@@ -32,16 +33,23 @@ async def check_sub(user_id, bot):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_sub(update.message.from_user.id, context.bot):
+        keyboard = [[InlineKeyboardButton("📢 Kanalga obuna bo'ling", url=CHANNEL_LINK)]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(
-            "⚠️ Botdan foydalanish uchun kanalga obuna bo'ling!\n\n"
-            "Obuna bo'lgach /start bosing."
+            "⚠️ Botdan foydalanish uchun kanalga obuna bo'ling!\n\nObuna bo'lgach /start bosing.",
+            reply_markup=reply_markup
         )
         return
     await update.message.reply_text("🎬 KinoKashf ga xush kelibsiz!\n\nKino raqamini yozing!")
 
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_sub(update.message.from_user.id, context.bot):
-        await update.message.reply_text("⚠️ Avval kanalga obuna bo'ling, keyin /start bosing!")
+        keyboard = [[InlineKeyboardButton("📢 Kanalga obuna bo'ling", url=CHANNEL_LINK)]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "⚠️ Avval kanalga obuna bo'ling!",
+            reply_markup=reply_markup
+        )
         return
     text = update.message.text.strip()
     if text.startswith("/del "):
@@ -74,7 +82,9 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     if not await check_sub(query.from_user.id, context.bot):
-        await query.message.reply_text("⚠️ Avval kanalga obuna bo'ling!")
+        keyboard = [[InlineKeyboardButton("📢 Kanalga obuna bo'ling", url=CHANNEL_LINK)]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.reply_text("⚠️ Avval kanalga obuna bo'ling!", reply_markup=reply_markup)
         return
     code, quality = query.data.split("|")
     movie = col.find_one({"code": code})
@@ -86,16 +96,19 @@ async def save(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parts = update.message.caption.split("|")
         if len(parts) == 7:
             code, name, info, actors, imdb, budget, quality = parts
-            if code not in [m["code"] for m in col.find()]:
-                col.insert_one({
+            col.update_one(
+                {"code": code},
+                {"$set": {
                     "code": code,
                     "name": name,
                     "info": info,
                     "actors": actors,
                     "imdb": imdb,
-                    "budget": budget
-                })
-            col.update_one({"code": code}, {"$set": {f"q{quality}": update.message.video.file_id}})
+                    "budget": budget,
+                    f"q{quality}": update.message.video.file_id
+                }},
+                upsert=True
+            )
             await update.message.reply_text(f"✅ {name} ({quality}) saqlandi!")
 
 app = ApplicationBuilder().token(TOKEN).build()
