@@ -25,7 +25,7 @@ TOKEN = "8983129680:AAHOBTUA_wt4BJLckxqg-FR2hKcdv7iIX78"
 # ── Admin ID (o'zingizning Telegram ID ingizni yozing) ──────────────────────
 ADMIN_ID = 7045504375  # <-- O'zgartiring!
 
-# ── Ma'lumotlarni /saqlash ───────────────────────────────────────────
+# ── Ma'lumotlarni yuklash/saqlash ───────────────────────────────────────────
 def load_data(filename):
     if os.path.exists(filename):
         with open(filename, "r", encoding="utf-8") as f:
@@ -311,4 +311,3 @@ app.add_handler(MessageHandler(filters.VIDEO, save_video))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
 app.run_polling()
-    
