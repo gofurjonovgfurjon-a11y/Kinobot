@@ -1,9 +1,8 @@
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import json
-import os
+from pymongo import MongoClient
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ChatJoinRequestHandler, filters, ContextTypes
 
 # ── HTTP server (Render uchun) ──────────────────────────────────────────────
 class Handler(BaseHTTPRequestHandler):
@@ -14,30 +13,35 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
-threading.Thread(
-    target=lambda: HTTPServer(('0.0.0.0', 8080), Handler).serve_forever(),
-    daemon=True
-).start()
+threading.Thread(target=lambda: HTTPServer(('0.0.0.0', 8080), Handler).serve_forever(), daemon=True).start()
 
-# ── Token ───────────────────────────────────────────────────────────────────
+# ── Sozlamalar ───────────────────────────────────────────────────────────────
 TOKEN = "8983129680:AAHOBTUA_wt4BJLckxqg-FR2hKcdv7iIX78"
+MONGO_URI = "mongodb+srv://Kinobot:Agafurvv78@cluster0.dy9xrik.mongodb.net/?appName=Cluster0"
+CHANNEL_ID = -1003932032419
+CHANNEL_LINK = "https://t.me/+B6ntAmj86_AwOTUy"
+ADMIN_ID = 7045504375
 
-# ── Admin ID (o'zingizning Telegram ID ingizni yozing) ──────────────────────
-ADMIN_ID = 7045504375  # <-- O'zgartiring!
+# ── MongoDB ──────────────────────────────────────────────────────────────────
+client = MongoClient(MONGO_URI)
+db = client["kinobot"]
+col = db["movies"]
+worlds_col = db["worlds"]
 
-# ── Ma'lumotlarni yuklash/saqlash ───────────────────────────────────────────
-def load_data(filename):
-    if os.path.exists(filename):
-        with open(filename, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+# ── Obuna tekshirish ─────────────────────────────────────────────────────────
+async def check_sub(user_id, bot):
+    try:
+        member = await bot.get_chat_member(CHANNEL_ID, user_id)
+        return member.status in ["member", "administrator", "creator"]
+    except:
+        return False
 
-def save_data(filename, data):
-    with open(filename, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-movies = load_data("movies.json")      # {kod: {name, info, 360, 720, 1080}}
-worlds = load_data("worlds.json")      # {olam_nomi: [kod1, kod2, ...]}
+# ── Obuna tugmasi ────────────────────────────────────────────────────────────
+def sub_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📢 Kanalga qo'shilish", url=CHANNEL_LINK)],
+        [InlineKeyboardButton("✅ Tasdiqlash", callback_data="check_sub")]
+    ])
 
 # ── Asosiy menyu ────────────────────────────────────────────────────────────
 def main_menu():
@@ -49,79 +53,153 @@ def main_menu():
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
+# ── Join request ─────────────────────────────────────────────────────────────
+async def approve_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.chat_join_request.approve()
+    await context.bot.send_message(
+        update.chat_join_request.from_user.id,
+        "✅ Kanalga qo'shildingiz!\n\n🎬 KinoKashf ga xush kelibsiz!",
+        reply_markup=main_menu()
+    )
+
 # ── /start ───────────────────────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    if not await check_sub(user_id, context.bot):
+        await update.message.reply_text(
+            "⚠️ Botdan foydalanish uchun kanalga qo'shiling!\n\nQo'shilgach ✅ Tasdiqlash bosing.",
+            reply_markup=sub_keyboard()
+        )
+        return
     context.user_data.clear()
     await update.message.reply_text(
-        "🎬 *KinoBot ga xush kelibsiz!*\n\nQuyidagi menyudan tanlang:",
+        "🎬 *KinoKashf ga xush kelibsiz!*\n\nKino raqamini yozing yoki menyudan tanlang:",
         parse_mode="Markdown",
         reply_markup=main_menu()
     )
 
+# ── Kino ma'lumotlarini ko'rsatish ───────────────────────────────────────────
+async def show_movie(message, movie):
+    keyboard = []
+    if "q360" in movie:
+        keyboard.append([InlineKeyboardButton("📱 360p", callback_data=f"{movie['code']}|360")])
+    if "q720" in movie:
+        keyboard.append([InlineKeyboardButton("🎬 720p", callback_data=f"{movie['code']}|720")])
+    if "q1080" in movie:
+        keyboard.append([InlineKeyboardButton("🔥 1080p", callback_data=f"{movie['code']}|1080")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    caption = (
+        f"🎬 {movie['name']}\n"
+        f"📅 {movie.get('info', '')}\n"
+        f"👥 {movie.get('actors', '')}\n"
+        f"⭐ {movie.get('imdb', '')}\n"
+        f"💰 {movie.get('budget', '')}"
+    )
+    if "trailer" in movie:
+        await message.reply_video(movie["trailer"], caption=caption, reply_markup=reply_markup)
+    else:
+        await message.reply_text(caption, reply_markup=reply_markup)
+
+# ── Barcha kinolar ───────────────────────────────────────────────────────────
+async def show_all_movies(update: Update):
+    all_movies = list(col.find())
+    if not all_movies:
+        await update.message.reply_text("📭 Hech qanday kino yo'q!")
+        return
+    buttons = []
+    for movie in all_movies:
+        buttons.append([InlineKeyboardButton(
+            f"🎬 {movie['name']} [{movie['code']}]",
+            callback_data=f"movie|{movie['code']}"
+        )])
+    await update.message.reply_text(
+        "📋 *Barcha kinolar:*",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+# ── Kino olamlar ─────────────────────────────────────────────────────────────
+async def show_worlds(update: Update):
+    all_worlds = list(worlds_col.find())
+    if not all_worlds:
+        await update.message.reply_text("🌌 Hozircha hech qanday olam yo'q!")
+        return
+    buttons = []
+    for w in all_worlds:
+        buttons.append([InlineKeyboardButton(f"🌌 {w['name']}", callback_data=f"world|{w['name']}")])
+    await update.message.reply_text(
+        "🌌 *Kino olamlarini tanlang:*",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
 # ── Asosiy matn handler ──────────────────────────────────────────────────────
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
     text = update.message.text.strip()
     state = context.user_data.get("state", "")
-    user_id = update.effective_user.id
 
-    # ── Admin: kino o'chirish ─────────────────────────────────────────────
-    if text.startswith("/del ") and user_id == ADMIN_ID:
-        code = text[5:].strip()
-        if code in movies:
-            del movies[code]
-            save_data("movies.json", movies)
-            await update.message.reply_text(f"✅ {code} raqamli kino o'chirildi!")
-        else:
-            await update.message.reply_text("❌ Bunday kino topilmadi!")
+    # Obuna tekshirish
+    if not await check_sub(user_id, context.bot):
+        await update.message.reply_text("⚠️ Avval kanalga qo'shiling!", reply_markup=sub_keyboard())
         return
 
-    # ── Admin: olam yaratish ──────────────────────────────────────────────
-    if text.startswith("/newworld ") and user_id == ADMIN_ID:
-        world_name = text[10:].strip()
-        if world_name not in worlds:
-            worlds[world_name] = []
-            save_data("worlds.json", worlds)
-            await update.message.reply_text(f"✅ '{world_name}' olami yaratildi!")
-        else:
-            await update.message.reply_text("⚠️ Bu olam allaqachon mavjud!")
-        return
+    # ── Admin buyruqlari ──────────────────────────────────────────────────
+    if user_id == ADMIN_ID:
 
-    # ── Admin: olamga kino qo'shish ───────────────────────────────────────
-    # /addtoworld OlamNomi|KinoKod
-    if text.startswith("/addtoworld ") and user_id == ADMIN_ID:
-        parts = text[12:].strip().split("|")
-        if len(parts) == 2:
-            world_name, code = parts[0].strip(), parts[1].strip()
-            if world_name in worlds and code in movies:
-                if code not in worlds[world_name]:
-                    worlds[world_name].append(code)
-                    save_data("worlds.json", worlds)
-                    await update.message.reply_text(f"✅ {movies[code]['name']} → '{world_name}' olamiga qo'shildi!")
+        if text.startswith("/del "):
+            code = text[5:].strip()
+            movie = col.find_one({"code": code})
+            if movie:
+                col.delete_one({"code": code})
+                await update.message.reply_text(f"✅ *{movie['name']}* o'chirildi!", parse_mode="Markdown")
+            else:
+                await update.message.reply_text("❌ Kino topilmadi!")
+            return
+
+        if text.startswith("/newworld "):
+            world_name = text[10:].strip()
+            if not worlds_col.find_one({"name": world_name}):
+                worlds_col.insert_one({"name": world_name, "movies": []})
+                await update.message.reply_text(f"✅ *{world_name}* olami yaratildi!", parse_mode="Markdown")
+            else:
+                await update.message.reply_text("⚠️ Bu olam allaqachon mavjud!")
+            return
+
+        if text.startswith("/addtoworld "):
+            parts = text[12:].strip().split("|")
+            if len(parts) == 2:
+                world_name, code = parts[0].strip(), parts[1].strip()
+                world = worlds_col.find_one({"name": world_name})
+                movie = col.find_one({"code": code})
+                if world and movie:
+                    worlds_col.update_one({"name": world_name}, {"$addToSet": {"movies": code}})
+                    await update.message.reply_text(
+                        f"✅ *{movie['name']}* → *{world_name}* olamiga qo'shildi!",
+                        parse_mode="Markdown"
+                    )
                 else:
-                    await update.message.reply_text("⚠️ Bu kino allaqachon bu olamda bor!")
+                    await update.message.reply_text("❌ Olam yoki kino topilmadi!")
             else:
-                await update.message.reply_text("❌ Olam yoki kino topilmadi!")
-        else:
-            await update.message.reply_text("❗ Format: /addtoworld OlamNomi|KinoKod")
-        return
+                await update.message.reply_text("❗ Format: /addtoworld OlamNomi|KinoKod")
+            return
 
-    # ── Admin: olamdan kino o'chirish ─────────────────────────────────────
-    # /delfromworld OlamNomi|KinoKod
-    if text.startswith("/delfromworld ") and user_id == ADMIN_ID:
-        parts = text[14:].strip().split("|")
-        if len(parts) == 2:
-            world_name, code = parts[0].strip(), parts[1].strip()
-            if world_name in worlds and code in worlds[world_name]:
-                worlds[world_name].remove(code)
-                save_data("worlds.json", worlds)
-                await update.message.reply_text(f"✅ Kino '{world_name}' olamidan o'chirildi!")
-            else:
-                await update.message.reply_text("❌ Topilmadi!")
-        return
+        if text.startswith("/delfromworld "):
+            parts = text[14:].strip().split("|")
+            if len(parts) == 2:
+                world_name, code = parts[0].strip(), parts[1].strip()
+                worlds_col.update_one({"name": world_name}, {"$pull": {"movies": code}})
+                await update.message.reply_text(f"✅ Kino *{world_name}* olamidan o'chirildi!", parse_mode="Markdown")
+            return
+
+        if text.startswith("/delworld "):
+            world_name = text[10:].strip()
+            worlds_col.delete_one({"name": world_name})
+            await update.message.reply_text(f"✅ *{world_name}* olami o'chirildi!", parse_mode="Markdown")
+            return
 
     # ── Menyu tugmalari ───────────────────────────────────────────────────
     if text == "🔍 Kino qidirish":
-        context.user_data["state"] = "search"
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔤 Nomi bo'yicha", callback_data="search_name")],
             [InlineKeyboardButton("🔢 Kod bo'yicha", callback_data="search_code")],
@@ -130,117 +208,75 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text == "📋 Barcha kinolar":
-        await show_all_movies(update, context)
+        await show_all_movies(update)
         return
 
     if text == "🌌 Kino olamlar":
-        await show_worlds(update, context)
+        await show_worlds(update)
         return
 
     if text == "📞 Admin bilan bog'lanish":
-        await update.message.reply_text("📩 Admin: @kom1lovic_a")
+        await update.message.reply_text("📩 Admin: @KinoKashf_admin")
         return
 
     # ── Qidiruv holati ────────────────────────────────────────────────────
     if state == "search_by_name":
-        results = {k: v for k, v in movies.items() if text.lower() in v.get("name", "").lower()}
+        context.user_data["state"] = ""
+        results = list(col.find({"name": {"$regex": text, "$options": "i"}}))
         if results:
-            for code, movie in results.items():
-                kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"🎬 {movie['name']}", callback_data=f"movie|{code}")]])
-                await update.message.reply_text(f"🎬 *{movie['name']}*\n📝 {movie.get('info','')}", parse_mode="Markdown", reply_markup=kb)
+            buttons = []
+            for movie in results:
+                buttons.append([InlineKeyboardButton(f"🎬 {movie['name']}", callback_data=f"movie|{movie['code']}")])
+            await update.message.reply_text(
+                f"🔍 *'{text}'* bo'yicha natijalar:",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(buttons)
+            )
         else:
             await update.message.reply_text("❌ Kino topilmadi!")
-        context.user_data["state"] = ""
         return
 
     if state == "search_by_code":
-        if text in movies:
-            await send_movie_menu(update, text)
+        context.user_data["state"] = ""
+        movie = col.find_one({"code": text})
+        if not movie:
+            try:
+                movie = col.find_one({"code": int(text)})
+            except:
+                pass
+        if movie:
+            await show_movie(update.message, movie)
         else:
             await update.message.reply_text("❌ Kino topilmadi!")
-        context.user_data["state"] = ""
         return
 
-    # ── Oddiy kod kiritish (eski usul ham ishlaydi) ───────────────────────
-    if text in movies:
-        await send_movie_menu(update, text, message=update.message)
-        return
-
-    await update.message.reply_text("❓ Nima qilishni bilmadim. Menyudan tanlang:", reply_markup=main_menu())
-
-# ── Barcha kinolar ro'yxati ──────────────────────────────────────────────────
-async def show_all_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not movies:
-        await update.message.reply_text("📭 Hech qanday kino yo'q!")
-        return
-    buttons = []
-    for code, movie in movies.items():
-        buttons.append([InlineKeyboardButton(f"🎬 {movie['name']} [{code}]", callback_data=f"movie|{code}")])
-    kb = InlineKeyboardMarkup(buttons)
-    await update.message.reply_text("📋 *Barcha kinolar:*", parse_mode="Markdown", reply_markup=kb)
-
-# ── Kino olamlar ─────────────────────────────────────────────────────────────
-async def show_worlds(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not worlds:
-        await update.message.reply_text("🌌 Hozircha hech qanday olam yo'q!")
-        return
-    buttons = []
-    for world_name in worlds.keys():
-        buttons.append([InlineKeyboardButton(f"🌌 {world_name}", callback_data=f"world|{world_name}")])
-    kb = InlineKeyboardMarkup(buttons)
-    await update.message.reply_text("🌌 *Kino olamlarini tanlang:*", parse_mode="Markdown", reply_markup=kb)
-
-# ── Kino menyu (sifat tanlash) ───────────────────────────────────────────────
-async def send_movie_menu(update, code, message=None):
-    movie = movies[code]
-    keyboard = []
-    if "360" in movie:
-        keyboard.append([InlineKeyboardButton("📱 360p", callback_data=f"quality|{code}|360")])
-    if "720" in movie:
-        keyboard.append([InlineKeyboardButton("🎬 720p", callback_data=f"quality|{code}|720")])
-    if "1080" in movie:
-        keyboard.append([InlineKeyboardButton("🔥 1080p", callback_data=f"quality|{code}|1080")])
-    kb = InlineKeyboardMarkup(keyboard)
-    msg = message or update.message
-    await msg.reply_text(
-        f"🎬 *{movie['name']}*\n📝 {movie.get('info', '')}",
-        parse_mode="Markdown",
-        reply_markup=kb
-    )
+    # ── Oddiy kod kiritish ────────────────────────────────────────────────
+    movie = col.find_one({"code": text})
+    if not movie:
+        try:
+            movie = col.find_one({"code": int(text)})
+        except:
+            pass
+    if movie:
+        await show_movie(update.message, movie)
+    else:
+        await update.message.reply_text("❌ Kino topilmadi!")
 
 # ── Callback handler ──────────────────────────────────────────────────────────
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
 
-    # Sifat tanlash → video yuborish
-    if data.startswith("quality|"):
-        _, code, quality = data.split("|")
-        if code in movies and quality in movies[code]:
-            await query.message.reply_video(movies[code][quality])
-        return
-
-    # Kino tanlash (ro'yxatdan)
-    if data.startswith("movie|"):
-        code = data.split("|")[1]
-        if code in movies:
-            await send_movie_menu(query, code, message=query.message)
-        return
-
-    # Olam tanlash
-    if data.startswith("world|"):
-        world_name = data.split("|", 1)[1]
-        codes = worlds.get(world_name, [])
-        if not codes:
-            await query.message.reply_text(f"🌌 '{world_name}' olamida hali kino yo'q!")
-            return
-        buttons = []
-        for code in codes:
-            if code in movies:
-                buttons.append([InlineKeyboardButton(f"🎬 {movies[code]['name']}", callback_data=f"movie|{code}")])
-        kb = InlineKeyboardMarkup(buttons)
-        await query.message.reply_text(f"🌌 *{world_name}* olamidagi kinolar:", parse_mode="Markdown", reply_markup=kb)
+    # Obuna tekshirish
+    if data == "check_sub":
+        if await check_sub(query.from_user.id, context.bot):
+            await query.message.edit_text(
+                "🎬 KinoKashf ga xush kelibsiz!\n\nKino raqamini yozing yoki menyudan tanlang:"
+            )
+            await context.bot.send_message(query.from_user.id, "Menyudan tanlang:", reply_markup=main_menu())
+        else:
+            await query.answer("❌ Siz hali kanalga qo'shilmadingiz!", show_alert=True)
         return
 
     # Qidiruv turi
@@ -254,25 +290,78 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("🔢 Kino kodini yozing:")
         return
 
+    # Barcha kinolar ro'yxatidan kino tanlash
+    if data.startswith("movie|"):
+        code = data.split("|")[1]
+        movie = col.find_one({"code": code})
+        if movie:
+            await show_movie(query.message, movie)
+        return
+
+    # Olam tanlash
+    if data.startswith("world|"):
+        world_name = data.split("|", 1)[1]
+        world = worlds_col.find_one({"name": world_name})
+        if not world or not world.get("movies"):
+            await query.message.reply_text(f"🌌 *{world_name}* olamida hali kino yo'q!", parse_mode="Markdown")
+            return
+        buttons = []
+        for code in world["movies"]:
+            movie = col.find_one({"code": code})
+            if movie:
+                buttons.append([InlineKeyboardButton(f"🎬 {movie['name']}", callback_data=f"movie|{code}")])
+        if buttons:
+            await query.message.reply_text(
+                f"🌌 *{world_name}* olamidagi kinolar:",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(buttons)
+            )
+        else:
+            await query.message.reply_text(f"🌌 *{world_name}* olamida hali kino yo'q!", parse_mode="Markdown")
+        return
+
+    # Sifat tanlash → video yuborish
+    if "|" in data:
+        parts = data.split("|")
+        if len(parts) == 2:
+            code, quality = parts
+            movie = col.find_one({"code": code})
+            if movie and f"q{quality}" in movie:
+                await query.message.reply_video(movie[f"q{quality}"])
+        return
+
 # ── Video yuklash (admin) ─────────────────────────────────────────────────────
-# Caption formati: kod|nomi|info|sifat
-# Masalan: 001|Avengers|Marvel filmi|720
-async def save_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id != ADMIN_ID:
+async def save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ Siz admin emassiz!")
         return
     if update.message.video and update.message.caption:
         parts = update.message.caption.split("|")
-        if len(parts) == 4:
-            code, name, info, quality = [p.strip() for p in parts]
-            if code not in movies:
-                movies[code] = {"name": name, "info": info}
-            movies[code][quality] = update.message.video.file_id
-            save_data("movies.json", movies)
-            await update.message.reply_text(f"✅ *{name}* ({quality}) saqlandi! Kod: `{code}`", parse_mode="Markdown")
+        # Treyler: trailer|kod|nomi|yil|aktyorlar|imdb|byudjet
+        if len(parts) == 7 and parts[0].strip().lower() == "trailer":
+            _, code, name, info, actors, imdb, budget = [p.strip() for p in parts]
+            col.update_one(
+                {"code": code},
+                {"$set": {"code": code, "name": name, "info": info, "actors": actors, "imdb": imdb, "budget": budget, "trailer": update.message.video.file_id}},
+                upsert=True
+            )
+            await update.message.reply_text(f"✅ *{name}* treyleri saqlandi! Kod: `{code}`", parse_mode="Markdown")
+        # Kino: kod|nomi|yil|aktyorlar|imdb|byudjet|sifat
+        elif len(parts) == 7:
+            code, name, info, actors, imdb, budget, quality = [p.strip() for p in parts]
+            col.update_one(
+                {"code": code},
+                {"$set": {"code": code, "name": name, "info": info, "actors": actors, "imdb": imdb, "budget": budget, f"q{quality}": update.message.video.file_id}},
+                upsert=True
+            )
+            await update.message.reply_text(f"✅ *{name}* ({quality}p) saqlandi! Kod: `{code}`", parse_mode="Markdown")
         else:
-            await update.message.reply_text("❗ Format: kod|nomi|info|sifat\nMasalan: 001|Avengers|Marvel filmi|720")
+            await update.message.reply_text(
+                "❗ Format:\n"
+                "Kino: `kod|nomi|yil,rejissor|aktyorlar|IMDb|kassa|sifat`\n"
+                "Treyler: `trailer|kod|nomi|yil,rejissor|aktyorlar|IMDb|kassa`",
+                parse_mode="Markdown"
+            )
 
 # ── Admin yordam ─────────────────────────────────────────────────────────────
 async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -280,34 +369,36 @@ async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     text = (
         "🛠 *Admin buyruqlari:*\n\n"
-        "📤 *Kino yuklash:* Video yuboring, caption:\n`kod|nomi|info|sifat`\n\n"
+        "📤 *Kino yuklash:*\n`kod|nomi|yil,rejissor|aktyorlar|IMDb|kassa|sifat`\n\n"
+        "🎞 *Treyler yuklash:*\n`trailer|kod|nomi|yil,rejissor|aktyorlar|IMDb|kassa`\n\n"
         "🗑 *Kino o'chirish:*\n`/del KOD`\n\n"
         "🌌 *Olam yaratish:*\n`/newworld OlamNomi`\n\n"
         "➕ *Olamga kino qo'shish:*\n`/addtoworld OlamNomi|KinoKod`\n\n"
         "➖ *Olamdan kino o'chirish:*\n`/delfromworld OlamNomi|KinoKod`\n\n"
-        "📋 *Mavjud olamlar:*\n`/listworlds`"
+        "🗑 *Olamni o'chirish:*\n`/delworld OlamNomi`\n\n"
+        "📋 *Olamlar ro'yxati:*\n`/listworlds`"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
 async def list_worlds(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
-    if not worlds:
+    all_worlds = list(worlds_col.find())
+    if not all_worlds:
         await update.message.reply_text("Hech qanday olam yo'q!")
         return
     text = "🌌 *Mavjud olamlar:*\n\n"
-    for name, codes in worlds.items():
-        text += f"• *{name}*: {len(codes)} ta kino\n"
+    for w in all_worlds:
+        text += f"• *{w['name']}*: {len(w.get('movies', []))} ta kino\n"
     await update.message.reply_text(text, parse_mode="Markdown")
 
 # ── App ──────────────────────────────────────────────────────────────────────
 app = ApplicationBuilder().token(TOKEN).build()
-
+app.add_handler(ChatJoinRequestHandler(approve_join))
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("admin", admin_help))
 app.add_handler(CommandHandler("listworlds", list_worlds))
-app.add_handler(CallbackQueryHandler(button_handler))
-app.add_handler(MessageHandler(filters.VIDEO, save_video))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
-app.run_polling()
+app.add_handler(CallbackQueryHandler(button))
+app.add_handler(MessageHandler(filters.VIDEO, save))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
+app.run_polling(drop_pending_updates=True)
