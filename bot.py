@@ -23,9 +23,9 @@ threading.Thread(
 TOKEN = "8983129680:AAHOBTUA_wt4BJLckxqg-FR2hKcdv7iIX78"
 
 # ── Admin ID (o'zingizning Telegram ID ingizni yozing) ──────────────────────
-ADMIN_ID = 123456789  # <-- O'zgartiring!
+ADMIN_ID = 7045504375  # <-- O'zgartiring!
 
-# ── Ma'lumotlarni yuklash/saqlash ───────────────────────────────────────────
+# ── Ma'lumotlarni /saqlash ───────────────────────────────────────────
 def load_data(filename):
     if os.path.exists(filename):
         with open(filename, "r", encoding="utf-8") as f:
@@ -138,7 +138,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text == "📞 Admin bilan bog'lanish":
-        await update.message.reply_text("📩 Admin: @admin_username")
+        await update.message.reply_text("📩 Admin: @kom1lovic_a")
         return
 
     # ── Qidiruv holati ────────────────────────────────────────────────────
@@ -311,4 +311,4 @@ app.add_handler(MessageHandler(filters.VIDEO, save_video))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
 app.run_polling()
-        
+    
